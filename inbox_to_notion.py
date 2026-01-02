@@ -45,7 +45,7 @@ def generate_texts(raw_input):
     """
 
     completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini", # Using mini is faster/cheaper for this
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Command: {raw_input}"}
@@ -60,7 +60,6 @@ def generate_texts(raw_input):
     return ai_data
 
 
-# NEW (Added source_link argument)
 def push_to_notion(task_name, description, priority, source_link):
     payload = {
         "parent": {"database_id": NOTION_DB_ID},
@@ -68,8 +67,6 @@ def push_to_notion(task_name, description, priority, source_link):
             "Task": {"title": [{"text": {"content": task_name}}]},
             "Description": {"rich_text": [{"text": {"content": description}}]},
             "Priority": {"select": {"name": priority}},
-            
-            # NEW: This block maps the link to your new Notion column
             "Source URL": {"url": source_link} 
         }
     }
@@ -90,14 +87,14 @@ def push_to_notion(task_name, description, priority, source_link):
         return None
 
 @app.command("/notion")
-def handle_command(ack, body, client, respond):
+def handle_command(ack, body, respond):
     ack()
     
     user_text = body.get("text", "").strip()
     user_id = body["user_id"]
 
-    channel_id = body.get("channel_id")  # <--- Added this
-    slack_link = f"https://slack.com/app_redirect?channel={channel_id}" # <--- Formatted into a URL
+    channel_id = body.get("channel_id")  
+    slack_link = f"https://slack.com/app_redirect?channel={channel_id}" 
 
     # Handle empty input
     if not user_text:
