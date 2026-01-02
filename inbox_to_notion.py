@@ -6,6 +6,10 @@ import requests
 import json
 from dotenv import load_dotenv
 import urllib.parse
+import time
+import imaplib
+import email
+from email.header import decode_header
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -137,73 +141,77 @@ def whatsapp_extraction():
 
 def email_extraction():
     """
-    Checks NotesTracker Labels for emails, processes them, and moves to Trash.
+    Checks the NotesTracker label for emails, processes them,
+    moves them back to the Inbox, and removes the label.
     """
-    try:
-        if not EMAIL_USER: return
-        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-        mail.login(EMAIL_USER, EMAIL_PASS)
-        status, _ = mail.select('"[Gmail]/NotesTracker"')
-        
-        if status == 'OK':
-            _, messages = mail.search(None, 'UNSEEN')
-            email_ids = messages[0].split()
+    while True:
+        try:
+            mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+            mail.login(EMAIL_USER, EMAIL_PASS)
             
-            for e_id in email_ids:
-                _, msg_data = mail.fetch(e_id, "(RFC822)")
-                
-                for response_part in msg_data:
-                    if isinstance(response_part, tuple):
-                        msg = email.message_from_bytes(response_part[1])
-                        
-                        subject, encoding = decode_header(msg["Subject"])[0]
-                        if isinstance(subject, bytes):
-                            subject = subject.decode(encoding or "utf-8")
-                        clean_subject = subject.replace("Fwd:", "").strip()
+            # Select the source folder
+            status, _ = mail.select("NotesTracker") 
 
-                        body = ""
-                        if msg.is_multipart():
-                            for part in msg.walk():
-                                content_type = part.get_content_type()
-                                content_disposition = str(part.get("Content-Disposition"))
-                                
-                                # We only want plain text, not HTML or attachments
-                                if "attachment" not in content_disposition:
-                                    if content_type == "text/plain":
+            if status == 'OK':
+                # Search for ALL emails in this folder
+                _, messages = mail.search(None, 'ALL')
+                email_ids = messages[0].split()
+
+                for e_id in email_ids:
+                    _, msg_data = mail.fetch(e_id, "(RFC822)")
+                    for response_part in msg_data:
+                        if isinstance(response_part, tuple):
+                            msg = email.message_from_bytes(response_part[1])
+                            
+                            # 1. Decode Subject
+                            subject, encoding = decode_header(msg["Subject"])[0]
+                            if isinstance(subject, bytes):
+                                subject = subject.decode(encoding or "utf-8")
+                            
+                            clean_subject = subject.replace("Fwd:", "").replace("FW:", "").strip()
+
+                            # 2. Get Deep Link back to Email
+                            raw_msg_id = msg.get("Message-ID", "").strip()
+                            if raw_msg_id:
+                                clean_id = raw_msg_id.strip("<>")
+                                encoded_id = urllib.parse.quote(clean_id)
+                                email_link = f"https://mail.google.com/mail/u/2/#search/rfc822msgid%3A{encoded_id}"
+                            else:
+                                email_link = "https://mail.google.com/mail/u/2/#inbox"
+
+                            # 3. Get Body for AI context
+                            body = ""
+                            if msg.is_multipart():
+                                for part in msg.walk():
+                                    if part.get_content_type() == "text/plain":
                                         body = part.get_payload(decode=True).decode()
-                                        break # Found the text, stop looking
-                                    elif content_type == "text/html" and body == "":
-                                        # Fallback to HTML if no plain text found (simplified)
-                                        body = part.get_payload(decode=True).decode()
-                        else:
-                            body = msg.get_payload(decode=True).decode()
+                                        break
+                            else:
+                                body = msg.get_payload(decode=True).decode()
 
-                        clean_body = body[:3000]
-
-                        raw_msg_id = msg.get("Message-ID", "").strip()
-                        if raw_msg_id:
-                            clean_id = raw_msg_id.strip("<>")
-                            encoded_id = urllib.parse.quote(clean_id)
-                            email_link = f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{encoded_id}"
-                        else:
-                            email_link = "https://mail.google.com/mail/u/0/#label/NotesTracker"
-
-                        print(f"Syncing: {clean_subject}")
-
-                        full_prompt = f"Subject: {clean_subject}\n\nEmail Body: {clean_body}"
-                        ai_result = generate_texts(full_prompt)
-                        
-                        push_to_notion(
-                            ai_result.get("name", clean_subject), 
-                            ai_result.get("description", "Imported from Email"), 
-                            ai_result.get("priority", "Medium"),
-                            email_link 
-                        )
-
-            mail.close()
-        mail.logout()
-    except Exception as e:
-        print(f"Email Loop Error: {e}")
+                            ai_result = generate_texts(f"Email Subject: {clean_subject}\nBody: {body[:3000]}")
+                            
+                            # 5. Push to Notion 
+                            push_to_notion(
+                                ai_result.get("name", clean_subject), 
+                                ai_result.get("description", "Imported from Email thread"), 
+                                ai_result.get("priority", "Medium"),
+                                email_link 
+                            )
+                            
+                            mail.copy(e_id, "INBOX")
+                            mail.store(e_id, '+FLAGS', '\\Deleted')
+                            
+                # Permanently remove the email from 'NotesTracker' (it's safe in INBOX now)
+                mail.expunge() 
+                mail.close() 
+            
+            mail.logout()
+            
+        except Exception as e:
+            print(f"Email Loop Error: {e}")
+        
+        time.sleep(30)
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
