@@ -56,8 +56,8 @@ def generate_texts(raw_input):
     
     ai_data = json.loads(completion.choices[0].message.content)
         
-        # Print for your debugging
-    print(f"✨ AI Generated: {ai_data}")
+    # Print for your debugging
+    # print(f"AI Generated: {ai_data}")
     return ai_data
 
 def push_to_notion(task_name, description, priority):
@@ -79,7 +79,7 @@ def push_to_notion(task_name, description, priority):
         if response.status_code == 200:
             return response.json()['url']
         else:
-            print(f"❌ Notion Error: {response.text}")
+            print(f"Notion Error: {response.text}")
             return None
     except Exception as e:
         print(f"Error: {e}")
@@ -95,7 +95,7 @@ def handle_command(ack, body, client, respond):
 
     # Handle empty input
     if not user_text:
-        respond("⚠️ Please provide text. Example: `/notion Fix bug on homepage`")
+        respond("Please provide text. Example: `/notion Fix bug on homepage`")
         return
 
     # 2. Send a temporary "Working" message (Visible only to user)
@@ -127,7 +127,6 @@ def handle_command(ack, body, client, respond):
     print(f"Notion URL: {notion_url}")
 
 
-
 if __name__ == "__main__":
-    print("Tracker Bot is running...")
+    print("Tracker Bot is running")
     SocketModeHandler(app, SLACK_APP_TOKEN).start()
