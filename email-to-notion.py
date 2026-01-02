@@ -170,7 +170,7 @@ def check_email_and_sync():
             mail.logout()
             
         except Exception as e:
-            print(f"⚠️ Email Loop Error: {e}")
+            print(f"Email Loop Error: {e}")
         
         # Wait 60 seconds before checking again
         time.sleep(60)
