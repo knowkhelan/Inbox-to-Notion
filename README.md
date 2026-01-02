@@ -1,6 +1,16 @@
 # Inbox-to-Notion
 Turn scattered messages into real tasks. Inbox-to-Notion pulls one-line work items from Slack, Outlook, Teams, and WhatsApp, enriches them with AI-generated titles, descriptions, and priorities, and syncs everything into a single Notion task hub.
 
+💡 The Problem: Context Switching
+Research shows it takes an average of 23 minutes to regain focus after a distraction. Every time you leave your IDE or browser to open Notion and log a task, you risk losing your "flow state."
+
+✨ The Solution
+Inbox-to-Notion allows you to capture tasks the moment they happen, directly from the communication tools you are already using.
+- Stay Focused: No more closing out your work-in-progress to update a To-Do list.
+- Never Forget: Send a quick thought via Slack or WhatsApp; our AI handles the formatting.
+- Centralized Hub: Everything lands in your Notion Task Hub, enriched with AI-generated titles, priorities, and descriptions.
+
+
 ## 🚀 Deployment (Render.com)
 
 This project is optimized for the **Render Free Tier**. Because Render "sleeps" free instances after 15 minutes of inactivity, we use a heartbeat strategy to keep the listeners active.
