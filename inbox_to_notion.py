@@ -89,7 +89,6 @@ def push_to_notion(task_name, description, priority, source_link):
         print(f"Error: {e}")
         return None
 
-# --- NEW SLACK HANDLER ---
 @app.command("/notion")
 def handle_command(ack, body, client, respond):
     ack()
