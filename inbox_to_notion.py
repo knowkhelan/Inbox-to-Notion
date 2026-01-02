@@ -6,7 +6,6 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from openai import OpenAI
 
-# 1. Setup Environment
 load_dotenv()
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_ID = os.getenv("NOTION_DATABASE_ID")
@@ -60,13 +59,18 @@ def generate_texts(raw_input):
     # print(f"AI Generated: {ai_data}")
     return ai_data
 
-def push_to_notion(task_name, description, priority):
+
+# NEW (Added source_link argument)
+def push_to_notion(task_name, description, priority, source_link):
     payload = {
         "parent": {"database_id": NOTION_DB_ID},
         "properties": {
             "Task": {"title": [{"text": {"content": task_name}}]},
             "Description": {"rich_text": [{"text": {"content": description}}]},
-            "Priority": {"select": {"name": priority}}
+            "Priority": {"select": {"name": priority}},
+            
+            # NEW: This block maps the link to your new Notion column
+            "Source URL": {"url": source_link} 
         }
     }
     
@@ -92,6 +96,9 @@ def handle_command(ack, body, client, respond):
     
     user_text = body.get("text", "").strip()
     user_id = body["user_id"]
+
+    channel_id = body.get("channel_id")  # <--- Added this
+    slack_link = f"https://slack.com/app_redirect?channel={channel_id}" # <--- Formatted into a URL
 
     # Handle empty input
     if not user_text:
@@ -119,11 +126,7 @@ def handle_command(ack, body, client, respond):
     else:
         final_prio = "Medium"
 
-    # Notion Save
-    notion_url = push_to_notion(final_task, final_desc, final_prio)
-
-    # 4. Push to Notion
-    notion_url = push_to_notion(final_task, final_desc, final_prio)
+    notion_url = push_to_notion(final_task, final_desc, final_prio, slack_link)    
     print(f"Notion URL: {notion_url}")
 
 
