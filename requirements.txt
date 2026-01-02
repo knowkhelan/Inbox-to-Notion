@@ -1,0 +1,7 @@
+flask
+twilio
+slack_bolt
+openai
+python-dotenv
+requests
+imaplib2

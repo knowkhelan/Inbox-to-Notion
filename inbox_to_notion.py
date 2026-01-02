@@ -2,57 +2,58 @@ import os
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 import threading
-
 import requests
 import json
 from dotenv import load_dotenv
+import urllib.parse
 
-# Slack Imports
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-# OpenAI Import
 from openai import OpenAI
 
 load_dotenv()
-
-# --- CONFIGURATION ---
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_ID = os.getenv("NOTION_DATABASE_ID")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS") 
 IMAP_SERVER = "imap.gmail.com" 
 
-# --- INITIALIZE CLIENTS ---
-# 1. Slack Client
 slack_app = App(token=SLACK_BOT_TOKEN)
-
-# 2. OpenAI Client
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
+whatsapp_client = Flask(__name__)
 
-# 3. Flask Client (For WhatsApp) - Renamed to flask_app to avoid conflict
-flask_app = Flask(__name__)
-
-# Headers for Notion
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
     "Notion-Version": "2022-06-28"
 }
 
-# --- SHARED FUNCTIONS (AI & NOTION) ---
 def generate_texts(raw_input):
     """
-    Takes text and expands it into a task using AI.
+    Takes text and expands it into a task using AI. 
     """
-    print(f"AI Processing: {raw_input[:50]}...") 
+    print(f"Processing text with AI: {raw_input[:50]}") 
 
     system_prompt = """
     You are a Task Expansion Agent. 
+    Your goal is to convert raw unstructured text (email, chat, or command) into a clear, actionable task.
+
+    OUTPUT GUIDELINES:
+    1. Name: concise, action-oriented, and clear (e.g., "Fix login bug" instead of "The login isn't working")
+    2. Description: concise, structured, and descriptive
+       - Use a professional but human tone.
+       - Use standard bullet points (• or -) for lists
+       - DO NOT use em dashes (—)
+       - Summarize the "What" and the "Why" clearly. 
+    3. Priority: Assign strictly based on REVENUE IMPACT:
+       - "High": Directly impacts sales, active customers, or immediate money (e.g., Server Down, Client Complaint, Contract Sign)
+       - "Medium": Enables future revenue or team productivity (e.g., Roadmap planning, Internal Syncs, Hiring)
+       - "Low": Administrative, maintenance, or tasks with no direct financial link (e.g., Office supplies, Organizing files)
+
     OUTPUT JSON ONLY:
     {"name": "...", "description": "...", "priority": "..."}
     """
@@ -69,7 +70,7 @@ def generate_texts(raw_input):
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
         print(f"AI Error: {e}")
-        return {"name": raw_input[:20], "description": "AI Failed", "priority": "Medium"}
+        return {"name": raw_input[:20], "description": "AI Failed", "priority": "N/A"}
 
 def push_to_notion(task_name, description, priority, source_link=None):
     properties = {
@@ -87,29 +88,28 @@ def push_to_notion(task_name, description, priority, source_link=None):
         r = requests.post(
             "https://api.notion.com/v1/pages",
             headers=headers,
-            json=payload,  # <— use json= (cleaner than data=json.dumps)
+            json=payload, 
             timeout=20,
         )
 
         print(f"🧾 Notion status={r.status_code}")
         if r.status_code in (200, 201):
             data = r.json()
-            print(f"✅ Notion created: {data.get('url')}")
+            print(f"Notion created: {data.get('url')}")
             return data.get("url")
 
-        print(f"❌ Notion error body: {r.text}")
+        print(f"Notion error body: {r.text}")
         return None
 
     except Exception as e:
-        print(f"❌ Notion exception: {e}")
+        print(f"Notion exception: {e}")
         return None
-    
 
-@flask_app.route("/whatsapp", methods=['POST'])
-def whatsapp_reply():
+@whatsapp_client.route("/whatsapp", methods=['POST'])
+def whatsapp_extraction():
     incoming_msg = request.values.get('Body', '').strip()
     sender = request.values.get('From', '')
-    print(f"📩 WhatsApp from {sender}: {incoming_msg}")
+    print(f"WhatsApp from {sender}: {incoming_msg}")
 
     resp = MessagingResponse()
     if not incoming_msg:
@@ -118,9 +118,9 @@ def whatsapp_reply():
 
     try:
         ai_result = generate_texts(incoming_msg)
-        print("🧠 AI result:", ai_result)
+        print("AI result:", ai_result)
     except Exception as e:
-        print("❌ AI crashed:", e)
+        print("AI crashed with error:", e)
         resp.message("AI failed before saving to Notion.")
         return str(resp)
 
@@ -131,67 +131,87 @@ def whatsapp_reply():
         "https://web.whatsapp.com/"
     )
 
-    resp.message(f"✅ Saved to Notion\n{notion_url}" if notion_url else "❌ Notion Error (check server logs)")
+    resp.message(f"Saved to Notion\n{notion_url}" if notion_url else "❌ Notion Error (check server logs)")
     return str(resp)
 
 
-# --- MODULE 1: EMAIL WATCHER (Background Thread) ---
-def check_email_and_sync():
+def email_extraction():
     """
-    Checks specific folder for emails, processes them, and moves to Trash.
+    Checks NotesTracker Labels for emails, processes them, and moves to Trash.
     """
-    while True:
-        try:
-            if not EMAIL_USER: return # Safety check
+    try:
+        if not EMAIL_USER: return
+        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+        mail.login(EMAIL_USER, EMAIL_PASS)
+        status, _ = mail.select("NotesTracker") 
+
+        if status == 'OK':
+            _, messages = mail.search(None, 'UNSEEN')
+            email_ids = messages[0].split()
             
-            mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-            mail.login(EMAIL_USER, EMAIL_PASS)
-            status, _ = mail.select("NotesTracker") 
-
-            if status == 'OK':
-                _, messages = mail.search(None, 'ALL')
-                email_ids = messages[0].split()
-
-                for e_id in email_ids:
-                    _, msg_data = mail.fetch(e_id, "(RFC822)")
-                    for response_part in msg_data:
-                        if isinstance(response_part, tuple):
-                            msg = email.message_from_bytes(response_part[1])
-                            subject, encoding = decode_header(msg["Subject"])[0]
-                            if isinstance(subject, bytes):
-                                subject = subject.decode(encoding or "utf-8")
-                            
-                            clean_subject = subject.replace("Fwd:", "").strip()
-                            print(f"📧 Email Found: {clean_subject}")
-
-                            # Process
-                            ai_result = generate_texts(clean_subject)
-                            push_to_notion(
-                                ai_result.get("name", clean_subject), 
-                                ai_result.get("description", "Imported from Email"), 
-                                ai_result.get("priority", "Medium"),
-                                "https://mail.google.com" 
-                            )
-                            
-                            # Delete
-                            mail.store(e_id, '+FLAGS', '\\Deleted')
+            for e_id in email_ids:
+                _, msg_data = mail.fetch(e_id, "(RFC822)")
                 
-                mail.expunge()
-                mail.close()
-            mail.logout()
-        except Exception as e:
-            print(f"Email Loop Error: {e}")
-        
-        time.sleep(60)
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+                        
+                        subject, encoding = decode_header(msg["Subject"])[0]
+                        if isinstance(subject, bytes):
+                            subject = subject.decode(encoding or "utf-8")
+                        clean_subject = subject.replace("Fwd:", "").strip()
+
+                        body = ""
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                content_type = part.get_content_type()
+                                content_disposition = str(part.get("Content-Disposition"))
+                                
+                                # We only want plain text, not HTML or attachments
+                                if "attachment" not in content_disposition:
+                                    if content_type == "text/plain":
+                                        body = part.get_payload(decode=True).decode()
+                                        break # Found the text, stop looking
+                                    elif content_type == "text/html" and body == "":
+                                        # Fallback to HTML if no plain text found (simplified)
+                                        body = part.get_payload(decode=True).decode()
+                        else:
+                            body = msg.get_payload(decode=True).decode()
+
+                        clean_body = body[:3000]
+
+                        raw_msg_id = msg.get("Message-ID", "").strip()
+                        if raw_msg_id:
+                            clean_id = raw_msg_id.strip("<>")
+                            encoded_id = urllib.parse.quote(clean_id)
+                            email_link = f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{encoded_id}"
+                        else:
+                            email_link = "https://mail.google.com/mail/u/0/#label/NotesTracker"
+
+                        print(f"Syncing: {clean_subject}")
+
+                        full_prompt = f"Subject: {clean_subject}\n\nEmail Body: {clean_body}"
+                        ai_result = generate_texts(full_prompt)
+                        
+                        push_to_notion(
+                            ai_result.get("name", clean_subject), 
+                            ai_result.get("description", "Imported from Email"), 
+                            ai_result.get("priority", "Medium"),
+                            email_link 
+                        )
+
+            mail.close()
+        mail.logout()
+    except Exception as e:
+        print(f"Email Loop Error: {e}")
 
 def run_flask():
-    print("   - Flask Server listening on Port 5050...")
-    flask_app.run(host='0.0.0.0', port=5050, use_reloader=False)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"   - Flask Server listening on Port {port}...")
+    whatsapp_client.run(host='0.0.0.0', port=port, use_reloader=False)
 
-
-# --- MODULE 3: SLACK HANDLER (Main Thread) ---
 @slack_app.command("/notion")
-def handle_slack_command(ack, body, respond):
+def slack_extraction(ack, body, respond):
     ack()
     user_text = body.get("text", "").strip()
     respond(f"Processing: {user_text}...")
@@ -205,21 +225,18 @@ def handle_slack_command(ack, body, respond):
     )
 
 if __name__ == "__main__":
-    print("🚀 STARTING UNIVERSAL INBOX BOT...")
-    
     # 1. Start Email Thread
-    print("   - Starting Email Watcher...")
-    email_thread = threading.Thread(target=check_email_and_sync)
+    print("    Starting Email Watcher")
+    email_thread = threading.Thread(target=email_extraction)
     email_thread.daemon = True
     email_thread.start()
 
-    # 2. Start WhatsApp (Flask) Thread
-    print("   - Starting WhatsApp Server (Port 5000)...")
+    # 2. Start WhatsApp Thread
+    print("    Starting WhatsApp Server")
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
     # 3. Start Slack Listener (Blocks the Main Thread)
-    print("   - Starting Slack Socket Mode...")
-    print("✅ ALL SYSTEMS GO!")
+    print("    Starting Slack Mode")
     SocketModeHandler(slack_app, SLACK_APP_TOKEN).start()
