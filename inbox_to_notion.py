@@ -143,8 +143,8 @@ def email_extraction():
         if not EMAIL_USER: return
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(EMAIL_USER, EMAIL_PASS)
-        status, _ = mail.select("NotesTracker") 
-
+        status, _ = mail.select('"[Gmail]/NotesTracker"')
+        
         if status == 'OK':
             _, messages = mail.search(None, 'UNSEEN')
             email_ids = messages[0].split()
